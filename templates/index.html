@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ML Model Comparison Tool</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .container { max-width: 1200px; margin-top: 2rem; }
+        .plot-image { max-width: 100%; margin-top: 1rem; }
+        .model-card { margin-bottom: 2rem; }
+        .settings-section { margin-bottom: 1.5rem; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="mb-4">ML Model Comparison Tool</h1>
+
+        <!-- File Upload -->
+        <div class="card mb-4">
+            <div class="card-body">
+                <form id="uploadForm">
+                    <div class="mb-3">
+                        <label for="csvFile" class="form-label">Upload CSV File</label>
+                        <input type="file" class="form-control" id="csvFile" accept=".csv" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Upload</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Analysis Settings -->
+        <div id="analysisSettings" style="display: none;" class="card mb-4">
+            <div class="card-body">
+                <form id="analysisForm">
+                    <!-- Feature Selection -->
+                    <div class="settings-section">
+                        <h5>Feature Selection</h5>
+                        <div class="mb-3">
+                            <label class="form-label">Select Features</label>
+                            <div id="featuresList"></div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="labelSelect" class="form-label">Select Label</label>
+                            <select class="form-control" id="labelSelect" required></select>
+                        </div>
+                    </div>
+
+                    <!-- Encoding Settings -->
+                    <div class="settings-section">
+                        <h5>Encoding Settings</h5>
+                        <div class="mb-3">
+                            <label class="form-label">Select Columns to Encode</label>
+                            <div id="encodingColumns"></div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Select Encoding Methods</label>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" value="label" id="labelEncoding" name="encoding_methods[]">
+                                <label class="form-check-label" for="labelEncoding">Label Encoding</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" value="onehot" id="onehotEncoding" name="encoding_methods[]">
+                                <label class="form-check-label" for="onehotEncoding">One-Hot Encoding</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Split Settings -->
+                    <div class="settings-section">
+                        <h5>Training Split Settings</h5>
+                        <div class="row">
+                            <div class="col-md-4">
+                                <div class="mb-3">
+                                    <label for="minSplit" class="form-label">Minimum Split</label>
+                                    <input type="number" class="form-control" id="minSplit" name="min_split"
+                                           min="0.1" max="0.9" step="0.1" value="0.1" required>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="mb-3">
+                                    <label for="maxSplit" class="form-label">Maximum Split</label>
+                                    <input type="number" class="form-control" id="maxSplit" name="max_split"
+                                           min="0.1" max="0.9" step="0.1" value="0.9" required>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="mb-3">
+                                    <label for="splitStep" class="form-label">Split Step</label>
+                                    <input type="number" class="form-control" id="splitStep" name="split_step"
+                                           min="0.1" max="0.5" step="0.1" value="0.1" required>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn btn-success">Analyze Models</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Results -->
+        <div id="results" style="display: none;">
+            <div class="row" id="modelResults">
+                <!-- Model results will be inserted here -->
+            </div>
+        </div>
+
+        <div id="error" class="alert alert-danger mt-3" style="display: none;"></div>
+    </div>
+
+    <script>
+        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData();
+            const fileInput = document.getElementById('csvFile');
+            formData.append('file', fileInput.files[0]);
+
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+
+                if (data.error) {
+                    showError(data.error);
+                    return;
+                }
+
+                // Populate features and encoding columns
+                const featuresList = document.getElementById('featuresList');
+                const encodingColumns = document.getElementById('encodingColumns');
+                const labelSelect = document.getElementById('labelSelect');
+                featuresList.innerHTML = '';
+                encodingColumns.innerHTML = '';
+                labelSelect.innerHTML = '';
+
+                data.columns.forEach(column => {
+                    // Add checkbox for features
+                    const featureDiv = document.createElement('div');
+                    featureDiv.className = 'form-check';
+                    featureDiv.innerHTML = `
+                        <input class="form-check-input feature-checkbox" type="checkbox"
+                               value="${column.name}" id="feature_${column.name}">
+                        <label class="form-check-label" for="feature_${column.name}">
+                            ${column.name} (${column.dtype})
+                        </label>
+                    `;
+                    featuresList.appendChild(featureDiv);
+
+                    // Add checkbox for encoding
+                    if (!column.is_numeric) {
+                        const encodingDiv = document.createElement('div');
+                        encodingDiv.className = 'form-check';
+                        encodingDiv.innerHTML = `
+                            <input class="form-check-input encode-checkbox" type="checkbox"
+                                   value="${column.name}" id="encode_${column.name}"
+                                   name="encode_columns[]">
+                            <label class="form-check-label" for="encode_${column.name}">
+                                ${column.name}
+                            </label>
+                        `;
+                        encodingColumns.appendChild(encodingDiv);
+                    }
+
+                    // Add option for label select
+                    const option = document.createElement('option');
+                    option.value = column.name;
+                    option.textContent = column.name;
+                    labelSelect.appendChild(option);
+                });
+
+                document.getElementById('analysisSettings').style.display = 'block';
+                document.getElementById('results').style.display = 'none';
+                document.getElementById('error').style.display = 'none';
+            } catch (error) {
+                showError('Error uploading file');
+            }
+        });
+
+        document.getElementById('analysisForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            // Validate form
+            const selectedFeatures = document.querySelectorAll('.feature-checkbox:checked');
+            if (selectedFeatures.length === 0) {
+                showError('Please select at least one feature');
+                return;
+            }
+
+            const encodingMethods = document.querySelectorAll('input[name="encoding_methods[]"]:checked');
+            const encodeColumns = document.querySelectorAll('.encode-checkbox:checked');
+            if (encodeColumns.length > 0 && encodingMethods.length === 0) {
+                showError('Please select at least one encoding method for the selected columns');
+                return;
+            }
+
+            // Show loading state
+            document.getElementById('error').style.display = 'none';
+            document.getElementById('results').style.display = 'none';
+            const submitButton = e.target.querySelector('button[type="submit"]');
+            const originalButtonText = submitButton.textContent;
+            submitButton.disabled = true;
+            submitButton.textContent = 'Analyzing...';
+
+            const formData = new FormData();
+            formData.append('file', document.getElementById('csvFile').files[0]);
+
+            // Append selected features
+            selectedFeatures.forEach(checkbox => {
+                formData.append('features[]', checkbox.value);
+            });
+
+            // Append label
+            formData.append('label', document.getElementById('labelSelect').value);
+
+            // Append encoding settings
+            encodingMethods.forEach(checkbox => {
+                formData.append('encoding_methods[]', checkbox.value);
+            });
+
+            encodeColumns.forEach(checkbox => {
+                formData.append('encode_columns[]', checkbox.value);
+            });
+
+            // Append split settings
+            formData.append('min_split', document.getElementById('minSplit').value);
+            formData.append('max_split', document.getElementById('maxSplit').value);
+            formData.append('split_step', document.getElementById('splitStep').value);
+
+            try {
+                const response = await fetch('/analyze', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+
+                if (data.error) {
+                    showError(data.error);
+                    return;
+                }
+
+                // Display results
+                const resultsContainer = document.getElementById('modelResults');
+                resultsContainer.innerHTML = '';
+
+                Object.entries(data.results).forEach(([modelKey, modelData]) => {
+                    const col = document.createElement('div');
+                    col.className = 'col-md-6 model-card';
+                    col.innerHTML = `
+                        <div class="card">
+                            <div class="card-header">
+                                <h5 class="card-title mb-0">${modelData.name}</h5>
+                            </div>
+                            <div class="card-body">
+                                <img src="data:image/png;base64,${modelData.plot}"
+                                     class="plot-image" alt="${modelData.name} plot">
+                                <div class="mt-3">
+                                    <strong>Best Accuracy:</strong>
+                                    ${Math.max(...modelData.accuracies).toFixed(4)}
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    resultsContainer.appendChild(col);
+                });
+
+                document.getElementById('results').style.display = 'block';
+            } catch (error) {
+                showError('Error analyzing data');
+            } finally {
+                // Restore button state
+                submitButton.disabled = false;
+                submitButton.textContent = originalButtonText;
+            }
+        });
+
+        function showError(message) {
+            const errorDiv = document.getElementById('error');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+        }
+
+        // Add validation for split settings
+        document.getElementById('minSplit').addEventListener('change', validateSplitSettings);
+        document.getElementById('maxSplit').addEventListener('change', validateSplitSettings);
+        document.getElementById('splitStep').addEventListener('change', validateSplitSettings);
+
+        function validateSplitSettings() {
+            const minSplit = parseFloat(document.getElementById('minSplit').value);
+            const maxSplit = parseFloat(document.getElementById('maxSplit').value);
+            const splitStep = parseFloat(document.getElementById('splitStep').value);
+
+            if (minSplit >= maxSplit) {
+                showError('Minimum split must be less than maximum split');
+                return false;
+            }
+
+            if (splitStep >= (maxSplit - minSplit)) {
+                showError('Split step must be less than the range between min and max splits');
+                return false;
+            }
+
+            document.getElementById('error').style.display = 'none';
+            return true;
+        }
+    </script>
+</body>
+</html>
